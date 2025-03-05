@@ -15,7 +15,7 @@ def _capitalize_commands(node, next_nodes):
         # Replace current node with a CommandNode with capitalized letters
         return CommandNode(node.data.upper())  
 
-    return None  # Makes no changes to the current node
+    return node  # Makes no changes to the current node
 
 #  Read the text from test.tex, convert to an AST, and return the root node
 root = to_ast(file="test.tex")
