@@ -4,11 +4,6 @@ from .demacro import Demacro
 
 import argparse
 
-# used for debugging
-from ipydex import IPS, activate_ips_on_exception
-
-activate_ips_on_exception()
-
 
 def demacro():
     parser = argparse.ArgumentParser()

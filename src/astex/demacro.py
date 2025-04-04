@@ -181,7 +181,7 @@ class Demacro:
         # Define or insert macros or environments
         if isinstance(n, CommandNode):
 
-            if n.data in ("newcommand", ):
+            if self.ignore_newcommand and n.data in ("newcommand", ):
                 return n
             if n.data in ('newcommand', 'renewcommand', 'providecommand'):
                 # Read in the command data
@@ -225,7 +225,7 @@ class Demacro:
                     macros[f"end{name}"] = {'args': 0, 'default': None, 'body': end_body}
 
                 return None
-            elif n.data in macros:
+            elif n.data in macros and children:
                 _expand_macro(children, macros[n.data], n.parent)
                 return None
             elif n.data in ('begin', 'end'):
