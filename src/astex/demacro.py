@@ -180,6 +180,9 @@ class Demacro:
 
         # Define or insert macros or environments
         if isinstance(n, CommandNode):
+
+            if n.data in ("newcommand", ):
+                return n
             if n.data in ('newcommand', 'renewcommand', 'providecommand'):
                 # Read in the command data
                 name = _read_command_name(children)
