@@ -20,7 +20,7 @@ def demacro():
     args = parser.parse_args()
 
     doc = to_ast(file=args.input)
-    dm = Demacro()
+    dm = Demacro(ignore_newcommand=True)
 
     # Note: this currently ony handles simple macros like
     # \newcommand{\tcblue}[1]{\textcolor{blue}{#1}}

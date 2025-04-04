@@ -154,8 +154,12 @@ def _expand_macro(it, data, parent):
 class Demacro:
     """A utility to de-macro LaTeX files."""
 
-    def __init__(self):
+    def __init__(self, ignore_newcommand=False):
         self.macros = {}
+
+        # this flag specifies that the occurrence of a macro intended for removal inside `\newcommand{...}`
+        # is ignored
+        self.ignore_newcommand = ignore_newcommand
 
     def _process(self, n, children):
         if not n.parent:
