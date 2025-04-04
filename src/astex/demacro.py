@@ -181,7 +181,7 @@ class Demacro:
         # Define or insert macros or environments
         if isinstance(n, CommandNode):
 
-            if self.ignore_newcommand and n.data in ("newcommand", ):
+            if self.ignore_newcommand and n.data in ("newcommand", "renewcommand"):
                 return n
             if n.data in ('newcommand', 'renewcommand', 'providecommand'):
                 # Read in the command data
