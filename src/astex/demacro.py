@@ -151,104 +151,103 @@ def _expand_macro(it, data, parent):
         c.parent = parent
         it.appendleft(c)
 
-
-def _process(n, children):
-    if not n.parent:
-        return n
-
-    # Keep track of macros
-    if n.parent.data is None:
-        n.parent.data = {'macros': n.parent.parent.data['macros'], 'copied': False}
-    macros = n.parent.data['macros']
-
-    def _check_macros():
-        # This is to avoid having to make many copies of the macros dict
-        nonlocal macros
-        if not n.parent.data['copied']:
-            n.parent.data['copied'] = True
-            macros = macros.copy()
-            n.parent.data['macros'] = macros
-
-    # Define or insert macros or environments
-    if isinstance(n, CommandNode):
-        if n.data in ('newcommand', 'renewcommand', 'providecommand'):
-            # Read in the command data
-            name = _read_command_name(children)
-            args, default, temp = _get_bracket_args(children)
-            body = GroupNode()
-            body.take(temp)
-            data = {'args': args, 'default': default, 'body': body}
-
-            # Add data to macros dict
-            if n.data == 'newcommand' and name in macros:
-                raise ValueError("Newcommand used for existing command")
-            elif n.data != 'providecommand' or name not in macros:
-                _check_macros()
-                macros[name] = data
-
-            return None
-        elif n.data in ('newenvironment', 'renewenvironment'):
-            # Read in environment name
-            temp = read_next(children)
-            name = str(temp)
-            if isinstance(temp, BracketNode):
-                name = name[1:-1]
-
-            # Read in number of args and default arg if available
-            args, default, temp = _get_bracket_args(children)
-
-            # Read in begin and end code
-            begin_body = GroupNode()
-            begin_body.take(temp)
-            temp = read_next(children)
-            end_body = GroupNode()
-            end_body.take(temp)
-
-            # Add data to macros dict
-            if n.data == 'newenvironment' and name in macros:
-                raise ValueError("Newenvironment used for existing environment")
-            else:
-                _check_macros()
-                macros[name] = {'args': args, 'default': default, 'body': begin_body}
-                macros[f"end{name}"] = {'args': 0, 'default': None, 'body': end_body}
-
-            return None
-        elif n.data in macros:
-            _expand_macro(children, macros[n.data], n.parent)
-            return None
-        elif n.data in ('begin', 'end'):
-            # Read in name
-            temp = read_next(children)
-            name = str(temp)
-            if isinstance(temp, BracketNode):
-                name = name[1:-1]
-
-            if n.data == 'end':
-                name = f"end{name}"
-
-            # Insert macro if it exists
-            if name in macros:
-                _expand_macro(children, macros[name], n.parent)
-                return None
-            else:
-                # Undo reading of name
-                children.appendleft(temp)
-
-    return n
-
-
 class Demacro:
     """A utility to de-macro LaTeX files."""
 
     def __init__(self):
         self.macros = {}
 
+    def _process(self, n, children):
+        if not n.parent:
+            return n
+
+        # Keep track of macros
+        if n.parent.data is None:
+            n.parent.data = {'macros': n.parent.parent.data['macros'], 'copied': False}
+        macros = n.parent.data['macros']
+
+        def _check_macros():
+            # This is to avoid having to make many copies of the macros dict
+            nonlocal macros
+            if not n.parent.data['copied']:
+                n.parent.data['copied'] = True
+                macros = macros.copy()
+                n.parent.data['macros'] = macros
+
+        # Define or insert macros or environments
+        if isinstance(n, CommandNode):
+            if n.data in ('newcommand', 'renewcommand', 'providecommand'):
+                # Read in the command data
+                name = _read_command_name(children)
+                args, default, temp = _get_bracket_args(children)
+                body = GroupNode()
+                body.take(temp)
+                data = {'args': args, 'default': default, 'body': body}
+
+                # Add data to macros dict
+                if n.data == 'newcommand' and name in macros:
+                    raise ValueError("Newcommand used for existing command")
+                elif n.data != 'providecommand' or name not in macros:
+                    _check_macros()
+                    macros[name] = data
+
+                return None
+            elif n.data in ('newenvironment', 'renewenvironment'):
+                # Read in environment name
+                temp = read_next(children)
+                name = str(temp)
+                if isinstance(temp, BracketNode):
+                    name = name[1:-1]
+
+                # Read in number of args and default arg if available
+                args, default, temp = _get_bracket_args(children)
+
+                # Read in begin and end code
+                begin_body = GroupNode()
+                begin_body.take(temp)
+                temp = read_next(children)
+                end_body = GroupNode()
+                end_body.take(temp)
+
+                # Add data to macros dict
+                if n.data == 'newenvironment' and name in macros:
+                    raise ValueError("Newenvironment used for existing environment")
+                else:
+                    _check_macros()
+                    macros[name] = {'args': args, 'default': default, 'body': begin_body}
+                    macros[f"end{name}"] = {'args': 0, 'default': None, 'body': end_body}
+
+                return None
+            elif n.data in macros:
+                _expand_macro(children, macros[n.data], n.parent)
+                return None
+            elif n.data in ('begin', 'end'):
+                # Read in name
+                temp = read_next(children)
+                name = str(temp)
+                if isinstance(temp, BracketNode):
+                    name = name[1:-1]
+
+                if n.data == 'end':
+                    name = f"end{name}"
+
+                # Insert macro if it exists
+                if name in macros:
+                    _expand_macro(children, macros[name], n.parent)
+                    return None
+                else:
+                    # Undo reading of name
+                    children.appendleft(temp)
+
+        return n
+
     def demacro(self, root):
         """De-macro the input AST node and return it.  All found macros are collected in the
         macros field, which persists across demacro calls."""
 
         root.data = {'macros': self.macros, 'copied': False}
-        root = root.filter(_process, False)
+
+        root = root.filter(self._process, False)
         self.macros = root.data['macros']
         return clear_data(root)
 
