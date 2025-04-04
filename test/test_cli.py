@@ -42,3 +42,7 @@ class Test_01_CLI(unittest.TestCase):
             self.assertEqual(res_src, expected_res_src)
 
         perform_test(macro_string="tcblue", res_idx=1)
+        perform_test(macro_string="tcred", res_idx=2)
+
+        # now test both macros at the same time
+        perform_test(macro_string="tcred tcblue", res_idx=3)
