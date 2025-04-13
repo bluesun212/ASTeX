@@ -3,6 +3,7 @@ import os
 import time
 
 from astex.ast import *
+from astex.utils import *
 
 LATEX_TEST = r"""
 \newcommand{\test}[1]{Hello, #1!}  % Test command

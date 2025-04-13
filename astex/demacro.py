@@ -3,40 +3,14 @@
 # - option to expand \include or look into \usepackage for macros
 # - Handling \def, \let, etc
 # - Dealing with paragraph breaks in commands
-
-
 from .ast import *
-from collections import deque
+from .utils import *
 from inspect import signature
 
 __all__ = ['Demacro']
 
 
-# Demacro static methods
-def _filter_children(node, filter_ws=True):
-    if isinstance(node, GroupNode):
-        c = list(filter(lambda n: not isinstance(n, CommentNode) and
-                 (not isinstance(n, WhitespaceNode) or not filter_ws), node.children))
-        if len(c) == 1:
-            return c[0]
-
-    return None
-
-
-def _read_until_end_bracket(it: deque):
-    node = GroupNode()
-
-    while True:
-        n = read_next(it)
-        if isinstance(n, TextNode) and n.data == ']':
-            break
-        node.add(n)
-
-    return node
-
-
 # Newcommand-related ones
-# FIXME: I know this isn't exactly how LaTeX implements these 2 commands, but this is good enough
 def _read_command_name(it):
     # Ignore stars for now, TODO
     n = read_next(it)
@@ -44,94 +18,47 @@ def _read_command_name(it):
         n = read_next(it)
 
     # Extract command name
-    n = _filter_children(n) or n
+    if isinstance(n, GroupNode):
+        n = read_next(n.children)
+
     if isinstance(n, CommandNode):
         return n.data
 
     raise ValueError("Incorrectly formatted command name")
 
 
-def _extract_arguments(node):
-    # Read the number of arguments and convert to a number
-    node = _filter_children(node) or node
-    if isinstance(node, TextNode):
-        try:
-            args = int(node.data)
-            if 0 <= args < 10:
-                return args
-        except ValueError:
-            pass
-
-    raise ValueError("Incorrectly formatted number of arguments")
-
-
-def _extract_optional_argument(node):
-    # Unwrap once internally if applicable
-    n = _filter_children(node, False)
-    if isinstance(n, BracketNode):
-        node = n
-
-    new_node = GroupNode()
-    new_node.take(node)
-    return new_node
-
-
 def _get_bracket_args(it):
-    temp = read_next(it)
+    def _to_args(node):
+        a = int(str(node))
+        if 0 <= a < 9:
+            return a
+        raise ValueError("Incorrectly formatted number of arguments")
 
     # A number of arguments was specified
     args = 0
-    if isinstance(temp, TextNode) and temp.data == '[':
-        temp = _read_until_end_bracket(it)
-        args = _extract_arguments(temp)
-        temp = read_next(it)
+    temp = read_bracket_arg(it)
+    if temp:
+        args = _to_args(temp)
 
-    # A default value was specified
-    default = None
-    if isinstance(temp, TextNode) and temp.data == '[':
-        temp = _read_until_end_bracket(it)
-        default = _extract_optional_argument(temp)
-        temp = read_next(it)
+    default = read_bracket_arg(it)
+    temp = read_next(it)
 
     return args, default, temp
-
-
-def _replace_parameters(root: GroupNode, params):
-    def _do_replace(n, _):
-        if isinstance(n, ParameterNode):
-            if n.num_hashes == 1:
-                # Replace with parameter value
-                n.parent.take(params[n.param - 1].copy())
-                return None
-            else:
-                n.num_hashes /= 2
-                if int(n.num_hashes) != n.num_hashes:
-                    raise ValueError("Number of hashes in parameter must be power of 2")
-
-        return n
-
-    return root.filter(_do_replace)
 
 
 def _expand_macro(it, data, parent):
     args = data['args']
     tokens = []
 
-    if data['args'] > 0:
+    if args > 0:
         # Read in first argument, handling the default as required
 
         if data['default'] is not None:
-            temp = read_next(it, False)
-            if isinstance(temp, TextNode) and temp.data == '[':
-                temp = _read_until_end_bracket(it)
-                temp2 = _filter_children(temp, False)
-                if isinstance(temp2, BracketNode):
-                    temp = temp2
+            temp = read_bracket_arg(it)
+            if temp:
                 tokens.append(temp)
             else:
                 tokens.append(data['default'])
-                if temp:  # Just in case there are no tokens left
-                    it.appendleft(temp)
 
             args -= 1
 
@@ -141,9 +68,12 @@ def _expand_macro(it, data, parent):
 
     # Replace the parameter tokens with the read-in parameters
     if callable(data['body']):
-        temp = data['body'](*tokens)
+        temp = GroupNode()
+        ret = data['body'](parent, it, *tokens)
+        if ret:  # In case None was returned
+            temp.take(ret)
     else:
-        temp = _replace_parameters(data['body'], tokens)
+        temp = replace_parameters(data['body'].copy(), tokens)
 
     for c in reversed(temp.children):
         # Add to front of queue to process expansion
@@ -233,6 +163,19 @@ def _process(n, children):
             else:
                 # Undo reading of name
                 children.appendleft(temp)
+    elif isinstance(n, EnvironmentNode) and n.name in macros:
+        # Expand \end macro, we have to do this first because we add to the head of the deque
+        _expand_macro(children, macros[f"end{n.name}"], n.parent)
+
+        # Read arguments then expand \begin macro in new deque in front of all internal tokens
+        _expand_macro(n.children, macros[n.name], n)
+
+        # Now add that deque in front
+        for temp in reversed(n.children):
+            temp.parent = n.parent
+            children.appendleft(temp)
+
+        return None
 
     return n
 
@@ -243,16 +186,20 @@ class Demacro:
     def __init__(self):
         self.macros = {}
 
-    def demacro(self, root):
+    def demacro(self, root: GroupNode) -> GroupNode:
         """De-macro the input AST node and return it.  All found macros are collected in the
         macros field, which persists across demacro calls."""
 
         root.data = {'macros': self.macros, 'copied': False}
-        root = root.filter(_process, False)
+        root = root.filter(_process)
         self.macros = root.data['macros']
         return clear_data(root)
 
-    def add_macros(self, macros, replace=False):
+    @staticmethod
+    def expand_unsafe(root):
+        return root.filter(_process)
+
+    def add_macros(self, macros: dict, replace=False):
         """Adds macros to the list.  macros should be a dictionary containing the macro name as keys
         and a dictionary as its value.  Each dictionary must contain a body key which corresponds to the
         macro body string.  The optional key args specifies how many arguments the macro takes.  The optional
@@ -266,6 +213,8 @@ class Demacro:
             if callable(v['body']):
                 body = v['body']
                 macro['args'] = len(signature(body).parameters)
+            elif isinstance(v['body'], GroupNode):
+                body = v['body']
             else:
                 body = GroupNode()
                 temp = to_ast(text=v['body'])
@@ -277,7 +226,17 @@ class Demacro:
             if 'args' in v:
                 macro['args'] = v['args']
             if 'default' in v:
-                macro['default'] = _extract_optional_argument(to_ast(text=v['default']))
+                macro['default'] = v['default']
+            if macro['default'] is not None:
+                macro['default'] = to_ast(text=macro['default'])
 
             if replace or k not in self.macros:
                 self.macros[k] = macro
+
+    def add_environments(self, envs, replace=False):
+        macros = {}
+        for k, v in envs.items():
+            macros[f"end{k}"] = {'body': v['end']}
+            macros[k] = {'body': v['start'], 'args': v.get('args', 0), 'default': v.get('default')}
+
+        self.add_macros(macros, replace)

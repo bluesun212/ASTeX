@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import copy
 from typing import List, Optional, Any
@@ -5,7 +7,7 @@ from collections import deque
 
 
 __all__ = ['Node', 'GroupNode', 'TextNode', 'CommandNode', 'CommentNode', 'WhitespaceNode',
-           'ParameterNode', 'BracketNode', 'to_ast', 'fix_whitespace', 'clear_data', 'read_next']
+           'ParameterNode', 'BracketNode', 'to_ast']
 
 MAX_RECURSE_LEVEL = 256
 
@@ -79,7 +81,9 @@ class Node:
         return f"{self.data}"
 
     def copy(self):
-        return copy.copy(self)
+        c = copy.copy(self)
+        c.parent = None
+        return c
 
 
 class GroupNode(Node):
@@ -87,45 +91,61 @@ class GroupNode(Node):
 
     def __init__(self):
         super().__init__(None)
-        self.children: List[Node] = []
+        self.children: deque[Node] = deque()
 
-    def add(self, child):
+    def remove(self, child):
+        self.children.remove(child)
+
+    def add(self, child, front=False):
         """Adds a child node to this node."""
-        self.children.append(child)
+        if child.parent:
+            pass  # TODO: child.parent.remove(child)
+
+        if front:
+            self.children.appendleft(child)
+        else:
+            self.children.append(child)
         child.parent = self
 
     def copy(self):
         """Creates a deep-copy of this node and all of its sub-nodes."""
+        # TODO: Okay, let's be honest, this is horrible
         new = self.__class__()
         for c in self.children:
             new.add(c.copy())
         return new
 
-    def take(self, node):
+    def take(self, node, front=False):
         """If node is a GroupNode, then take all of its child nodes.  Otherwise, add node as a child."""
 
         if isinstance(node, GroupNode):
-            for c in node.children:
-                self.add(c)
-        else:
-            self.add(node)
+            if front:
+                self.children.extendleft(reversed(node.children))
+            else:
+                self.children.extend(node.children)
 
-    def filter(self, filter_func, should_copy=True):
+            for n in node.children:
+                n.parent = self
+
+            node.children.clear()
+        else:
+            self.add(node, front)
+
+    def filter(self, filter_func) -> GroupNode:
         """
         Recursively filter through the AST tree starting at this node, applying the function filter_func.
 
         :param filter_func: is a function that takes two arguments.  The first is the current node in the
-        tree, and the second is the remaining nodes that are queued up.  If the function returns None,
-        the current node will be removed, otherwise the returned Node object will be added.
-        :param should_copy: determines whether the tree will first be copied, and defaults to true."""
+            tree, and the second is the remaining nodes that are queued up.  If the function returns None,
+            the current node will be removed, otherwise the returned Node object will be added."""
 
-        def _do_filter(node, level=0):
+        def _do_filter(node: GroupNode, level=0):
             if level > MAX_RECURSE_LEVEL:
                 raise ValueError("Max recursion level reached")
 
             # Iterate through the object's children using a queue
-            children = deque(node.children)
-            node.children = []
+            children = node.children
+            node.children = deque()
 
             while children:
                 n = children.popleft()
@@ -139,8 +159,8 @@ class GroupNode(Node):
 
             return node
 
-        # Call the function on the root node, copying if required, then go up one node
-        obj = filter_func(self.copy() if should_copy else self, deque())
+        # Call the function on the root node then go up one node
+        obj = filter_func(self, deque())
         return _do_filter(obj)
 
     def __str__(self):
@@ -151,9 +171,9 @@ class GroupNode(Node):
 TOKEN_COMMENT = re.compile(r"%(.*\n?)", re.MULTILINE)
 TOKEN_COMMAND = re.compile(r"\\([a-zA-Z@]{2,}|.)")
 TOKEN_PARAMETER = re.compile(r"(#+)(\d)")
-TOKEN_LCB = re.compile(r"(?<!\\)\{")
-TOKEN_RCB = re.compile(r"(?<!\\)}")
-TOKEN_WHITESPACE = re.compile(r"(?<!\\)\s+")
+TOKEN_LCB = re.compile(r"\{")
+TOKEN_RCB = re.compile(r"}")
+TOKEN_WHITESPACE = re.compile(r"\s+")
 def_tokenizer = Tokenizer([TOKEN_COMMENT, TOKEN_COMMAND, TOKEN_PARAMETER,
                            TOKEN_LCB, TOKEN_RCB, TOKEN_WHITESPACE])
 
@@ -194,7 +214,7 @@ class BracketNode(GroupNode):
         return f"{{{children_str}}}"
 
 
-def to_ast(text: str = None, file=None, tokenizer=None):
+def to_ast(text: str = None, file=None, tokenizer=None) -> GroupNode:
     """Convert the LaTeX source in text to an AST.  Returns a GroupNode containing the data."""
     # Extract text from file if applicable
     if (file is None) == (text is None):
@@ -210,7 +230,9 @@ def to_ast(text: str = None, file=None, tokenizer=None):
         tokenizer = def_tokenizer
 
     # Iteratively build up the AST
-    curr = GroupNode()
+    root = GroupNode()
+    curr = root
+
     for t in tokenizer.tokenize(text):
         if isinstance(t, NoMatch):
             curr.add(TextNode(t.get_text()))
@@ -233,54 +255,7 @@ def to_ast(text: str = None, file=None, tokenizer=None):
         else:
             raise ValueError("Invalid token type")
 
+    if curr is not root:
+        raise ValueError("Number of {s and }s don't match or the order is incorrect")
+
     return curr
-
-
-def fix_whitespace(root: GroupNode):
-    """Inserts a space between alphabetic backslash commands and text if none exists."""
-
-    def _fix_whitespace(n, children: deque):
-        if children:
-            if isinstance(n, CommandNode) and n.data[0].isalpha():
-                if isinstance(children[0], TextNode) and children[0].data[0].isalpha():
-                    padding = WhitespaceNode(data=' ')
-                    padding.parent = n.parent
-                    children.appendleft(padding)
-
-        return n
-
-    return root.filter(_fix_whitespace)
-
-
-def clear_data(root):
-    """Deletes any extra data stored in the GroupNode objects in the provided Node and its children."""
-
-    def _clear_data(n, _):
-        if isinstance(n, GroupNode):
-            n.data = None
-
-        return n
-
-    return root.filter(_clear_data, False)
-
-
-def read_next(it: deque, error=True) -> Optional[Node]:
-    """Get the first non-whitespace, non-comment node in queue, possibly erroring if there was no Node found.
-    Only return a single character if a TextNode was found."""
-    try:
-        while True:
-            n = it.popleft()
-            if not (isinstance(n, WhitespaceNode) or isinstance(n, CommentNode)):
-                # If it's text, only return a single character
-                if isinstance(n, TextNode) and len(n.data) > 1:
-                    leftover = TextNode(data=n.data[1:])
-                    leftover.parent = n.parent
-                    it.appendleft(leftover)
-                    n = TextNode(data=n.data[0])
-
-                return n
-    except IndexError:
-        if error:
-            raise ValueError("Unexpected end of tokens")
-
-    return None
