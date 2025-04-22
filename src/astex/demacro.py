@@ -116,7 +116,7 @@ class Demacro:
             # Handle body argument, valid options: LaTeX text or a custom function
             if callable(v['body']):
                 body = v['body']
-                macro['args'] = len(signature(body).parameters)
+                macro['args'] = len(signature(body).parameters) - 2
             elif isinstance(v['body'], GroupNode):
                 body = v['body']
             else:
@@ -164,20 +164,30 @@ class Demacro:
 
         # Define or insert macros or environments
         if isinstance(n, CommandNode):
-            if n.data in ('newcommand', 'renewcommand', 'providecommand') and not self._ignore_new_macros:
+            if n.data in ('newcommand', 'renewcommand', 'providecommand'):
                 # Read in the command data
                 name = _read_command_name(children)
-                args, default, temp = _get_bracket_args(children)
-                body = GroupNode()
-                body.take(temp)
-                data = {'args': args, 'default': default, 'body': body}
 
-                # Add data to macros dict
-                if n.data == 'newcommand' and name in macros:
-                    raise ValueError("Newcommand used for existing command")
-                elif n.data != 'providecommand' or name not in macros:
-                    _check_macros()
-                    macros[name] = data
+                # We need to read in the command name regardless of the value of ignore_new_macros
+                # without doing so, it will try to demacro the following command in case it has been set
+                # TODO: Make this more robust by reading in the command then undoing the read
+                if self._ignore_new_macros:
+                    temp = BracketNode()
+                    temp.add(CommandNode(name))
+                    n.parent.add(n)
+                    n.parent.add(temp)
+                else:
+                    args, default, temp = _get_bracket_args(children)
+                    body = GroupNode()
+                    body.take(temp)
+                    data = {'args': args, 'default': default, 'body': body}
+
+                    # Add data to macros dict
+                    if n.data == 'newcommand' and name in macros:
+                        raise ValueError("Newcommand used for existing command")
+                    elif n.data != 'providecommand' or name not in macros:
+                        _check_macros()
+                        macros[name] = data
 
                 return None
             elif n.data in ('newenvironment', 'renewenvironment') and not self._ignore_new_macros:

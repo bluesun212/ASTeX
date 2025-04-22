@@ -15,7 +15,7 @@ def demacro():
     args = parser.parse_args()
 
     doc = to_ast(file=args.input)
-    dm = Demacro(ignore_newcommand=True)
+    dm = Demacro()
 
     # Note: this currently ony handles simple macros like
     # \newcommand{\tcblue}[1]{\textcolor{blue}{#1}}
@@ -24,9 +24,9 @@ def demacro():
     for macro_name in args.remove_macros:
         macro_items.append((macro_name, {"body": "#1", "args": 1}))
 
-        dm.add_macros(dict(macro_items))
+    dm.add_macros(dict(macro_items))
 
-    doc_dm = dm.demacro(doc)
+    doc_dm = dm.demacro(doc, ignore_new_macros=True)
 
     if os.path.exists(args.output):
         raise FileExistsError(args.output)
