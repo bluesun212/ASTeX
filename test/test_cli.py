@@ -4,27 +4,21 @@ import unittest
 
 
 current_dir = os.path.dirname(os.path.abspath(sys.modules.get(__name__).__file__))
-
 TEST_DATA_DIR = os.path.join(current_dir, "testdata")
-
 DOC1 = os.path.join(TEST_DATA_DIR, "doc1.tex")
 
 
-class Test_01_CLI(unittest.TestCase):
-
+class TestCLI01(unittest.TestCase):
     def setUp(self):
         self.files_ro_remove = []
 
-
     def tearDown(self):
-
         for fpath in self.files_ro_remove:
             if os.path.isfile(fpath):
                 os.unlink(fpath)
         return super().tearDown()
 
     def test_01_demacro(self):
-
         def perform_test(macro_string, res_idx):
             res_path = DOC1.replace(".tex", f"_dm{res_idx}.tex")
             expected_res_path = DOC1.replace(".tex", f"__dm_expected{res_idx}.tex")
