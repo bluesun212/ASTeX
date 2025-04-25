@@ -41,6 +41,6 @@ class TestDemacro(unittest.TestCase):
         root = to_ast(text=TEST_LATEX)
         dm = Demacro()
         dm.add_macros({"test": {"body": r"\newcommand{\newtest}[1]{#1 = ##1}", "args": 1, "default": "test"}})
-        dm.add_macros({"code": {"body": lambda _, __: GroupNode()}})
+        dm.add_macros({"code": {"body": lambda _: GroupNode()}})
         self.assertEqual(TEST_OUTPUT, str(dm.demacro(root)).strip())
 

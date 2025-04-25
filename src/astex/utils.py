@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-from collections import deque
 from typing import Optional, List
 
 from astex.ast import *
@@ -26,57 +24,64 @@ class EnvironmentNode(GroupNode):
         return cpy
 
 
-def read_next(it: deque, error=True, skip_whitespace=True, skip_comments=True) -> Optional[Node]:
+def read_next(n: Node, error=True, skip_whitespace=True, skip_comments=True, should_pop=True) -> Optional[Node]:
     """Get the first non-whitespace, non-comment node in queue, possibly erroring if there was no Node found.
     Only return a single character if a TextNode was found."""
-    try:
-        while True:
-            n = it.popleft()
-            if not (skip_whitespace and isinstance(n, WhitespaceNode)) and \
-                    not (skip_comments and isinstance(n, CommentNode)):
-                # If it's text, only return a single character
-                if isinstance(n, TextNode) and len(n.data) > 1:
-                    parent = n.parent
-                    leftover = TextNode(data=n.data[1:])
-                    leftover.parent = parent
-                    it.appendleft(leftover)
-                    n = TextNode(data=n.data[0])
-                    n.parent = parent
+    parent = n.parent
+    n = n.next
 
-                return n
-    except IndexError:
-        if error:
-            raise ValueError("Unexpected end of tokens")
+    while n:
+        if not (skip_whitespace and isinstance(n, WhitespaceNode)) and \
+                not (skip_comments and isinstance(n, CommentNode)):
+            # If it's text, only return a single character
+            if isinstance(n, TextNode) and len(n.data) > 1:
+                text = n.data
+                n = n.replace(TextNode(data=text[0]))
+                leftover = TextNode(data=text[1:])
+                parent.add(leftover, n)
+
+            return n
+
+        # Throw away this element and get the next
+        if should_pop:
+            n = n.pop(ret=1)
+        else:
+            n = n.next
+
+    if error:
+        raise ValueError("Unexpected end of tokens")
 
     return None
 
 
-def read_bracket_arg(it: deque) -> Optional[GroupNode]:
-    temp = read_next(it, False)
+def read_bracket_arg(n: Node) -> Optional[GroupNode]:
+    temp = read_next(n, error=False)
 
     if isinstance(temp, TextNode) and temp.data == '[':
+        temp.pop()
+
         # Collect inside elements in new group
         node = GroupNode()
+
         while True:
-            temp = read_next(it, skip_comments=False, skip_whitespace=False)
+            temp = read_next(n, skip_comments=False, skip_whitespace=False)
             if isinstance(temp, TextNode) and temp.data == ']':
+                temp.pop()
                 break
             node.add(temp)
 
         # Unwrap if there is only one non-comment element that's a GroupNode
-        c = list(filter(lambda n: not isinstance(n, CommentNode), node.children))
+        c = list(filter(lambda x: not isinstance(x, CommentNode), node.children()))
         if len(c) == 1 and isinstance(c[0], GroupNode):
             return c[0]  # type: ignore
 
         return node
-    elif temp:
-        it.appendleft(temp)
 
     return None
 
 
 def replace_parameters(root: GroupNode, parameters: List[Node], copy=True):
-    def _do_replace(n, _):
+    def _do_replace(n):
         if isinstance(n, ParameterNode):
             if n.num_hashes == 1:
                 # Replace with parameter value
@@ -84,7 +89,7 @@ def replace_parameters(root: GroupNode, parameters: List[Node], copy=True):
                 if copy:
                     obj = obj.copy()
 
-                n.parent.take(obj)
+                n.parent.take(obj, n, after=False)
                 return None
             else:
                 n.num_hashes /= 2
@@ -99,13 +104,11 @@ def replace_parameters(root: GroupNode, parameters: List[Node], copy=True):
 def fix_whitespace(root: GroupNode) -> GroupNode:
     """Inserts a space between alphabetic backslash commands and text if none exists."""
 
-    def _fix_whitespace(n, children: deque):
-        if children:
-            if isinstance(n, CommandNode) and n.data[0].isalpha():
-                if isinstance(children[0], TextNode) and children[0].data[0].isalpha():
-                    padding = WhitespaceNode(data=' ')
-                    padding.parent = n.parent
-                    children.appendleft(padding)
+    def _fix_whitespace(n):
+        if n.next:
+            if isinstance(n, CommandNode) and n.data[0].isalpha() and \
+                    isinstance(n.next, TextNode) and n.next.data[0].isalpha():
+                n.parent.add(WhitespaceNode(data=' '), n)
 
         return n
 
@@ -115,7 +118,7 @@ def fix_whitespace(root: GroupNode) -> GroupNode:
 def clear_data(root: GroupNode) -> GroupNode:
     """Deletes any extra data stored in the GroupNode objects in the provided Node and its children."""
 
-    def _clear_data(n, _):
+    def _clear_data(n):
         if isinstance(n, GroupNode):
             n.data = None
 
@@ -128,23 +131,24 @@ def parse_environments(root: GroupNode) -> GroupNode:
     """Filters the given node and replaces matching \\begin and \\end environments with
     an EnvironmentNode, which contains all the in-between nodes, including the environment arguments."""
 
-    def _read_name(children: deque):
-        temp = read_next(children)
+    def _read_name(n: Node):
+        temp = read_next(n)
         name = str(temp)
         if isinstance(temp, BracketNode):
             name = name[1:-1]
 
+        temp.pop()
         return name
 
-    def _parse_environments(n, children: deque):
+    def _parse_environments(n):
         if isinstance(n, CommandNode) and n.data == 'begin':
             # Read in environment name
-            n = EnvironmentNode(_read_name(children))
+            env = EnvironmentNode(_read_name(n))
             internal_envs = 0
 
             # Read until a matching end is encountered
             while internal_envs >= 0:
-                temp = children.popleft()
+                temp = n.next
                 if isinstance(temp, CommandNode):
                     # This isn't the most efficient when many environments are nested,
                     # but for now this is acceptable
@@ -152,13 +156,15 @@ def parse_environments(root: GroupNode) -> GroupNode:
                         internal_envs += 1
                     elif temp.data == 'end':
                         internal_envs -= 1
-                n.add(temp)
+                env.add(temp)
 
             # Remove the last node because it was the matching \end
             # and check the name to ensure it matches
-            n.children.pop()
-            if _read_name(children) != n.name:
+            env.end.pop()
+            if _read_name(n) != env.name:
                 raise ValueError("Matching \\end has incorrect environment name")
+
+            return env
 
         return n
 

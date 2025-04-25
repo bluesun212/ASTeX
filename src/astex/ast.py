@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import copy
 from typing import List, Optional, Any
-from collections import deque
 
 
 __all__ = ['Node', 'GroupNode', 'TextNode', 'CommandNode', 'CommentNode', 'WhitespaceNode',
@@ -76,6 +75,8 @@ class Node:
     def __init__(self, data=None):
         self.data: Optional[Any] = data
         self.parent: Optional[GroupNode] = None
+        self.next: Optional[Node] = None
+        self.prev: Optional[Node] = None
 
     def __str__(self):
         return f"{self.data}"
@@ -83,7 +84,27 @@ class Node:
     def copy(self):
         c = copy.copy(self)
         c.parent = None
+        c.next = None
+        c.prev = None
         return c
+
+    def pop(self, ret=0):
+        n = self
+        if ret > 0:
+            n = self.next
+        elif ret < 0:
+            n = self.prev
+
+        if self.parent:
+            self.parent.remove(self)
+        return n
+
+    def replace(self, new: Node):
+        if new is not self:
+            self.parent.add(new, self)
+            self.parent.remove(self)
+
+        return new
 
 
 class GroupNode(Node):
@@ -91,45 +112,122 @@ class GroupNode(Node):
 
     def __init__(self):
         super().__init__(None)
-        self.children: deque[Node] = deque()
+        self.start: Optional[Node] = None
+        self.end: Optional[Node] = None
 
-    def remove(self, child):
-        self.children.remove(child)
+    def children(self):
+        curr = self.start
+        while curr:
+            yield curr
+            curr = curr.next
 
-    def add(self, child, front=False):
-        """Adds a child node to this node."""
-        if child.parent:
-            pass  # TODO: child.parent.remove(child)
+    def remove(self, child: Node):
+        if child.parent is not self:
+            raise ValueError("Called remove on wrong parent")
 
-        if front:
-            self.children.appendleft(child)
+        # Next and previous nodes
+        if child.next is not None:
+            child.next.prev = child.prev
+
+        if child.prev is not None:
+            child.prev.next = child.next
+
+        # Parent related nodes
+        child.parent = None
+        if child == self.start:
+            self.start = child.next
+
+        if child == self.end:
+            self.end = child.prev
+
+        child.next = None
+        child.prev = None
+        return child
+
+    def add(self, new: Node, child: Optional[Node] = None, after=True):
+        if new.parent:
+            new.parent.remove(new)
+        new.parent = self
+
+        if child is None:
+            child = self.end if after else self.start
+
+        if child is None:
+            self.start = new
+            self.end = new
+        elif after:
+            if child.next:
+                child.next.prev = new
+                new.next = child.next
+            else:
+                self.end = new
+            child.next = new
+            new.prev = child
         else:
-            self.children.append(child)
-        child.parent = self
+            if child.prev:
+                child.prev.next = new
+                new.prev = child.prev
+            else:
+                self.start = new
+            child.prev = new
+            new.next = child
+
+    def take(self, new: Node, child: Optional[Node] = None, after=True):
+        if not isinstance(new, GroupNode):
+            self.add(new, child, after)
+            return
+
+        if not new.start:
+            return
+
+        # Remove all children from parent and get start+end nodes
+        start = new.start
+        n = start
+        new.start = None
+        new.end = None
+
+        while True:
+            n.parent = self
+            if n.next:
+                n = n.next
+            else:
+                end = n
+                break
+
+        if child is None:
+            child = self.end if after else self.start
+
+        if child is None:
+            self.start = start
+            self.end = end
+            start.prev = None
+            end.next = None
+        elif after:
+            if child.next:
+                child.next.prev = end
+                end.next = child.next
+            else:
+                self.end = end
+            child.next = start
+            start.prev = child
+        else:
+            if child.prev:
+                child.prev.next = start
+                start.prev = child.prev
+            else:
+                self.start = start
+            child.prev = end
+            end.next = child
 
     def copy(self):
         """Creates a deep-copy of this node and all of its sub-nodes."""
-        # TODO: Okay, let's be honest, this is horrible
-        new = self.__class__()
-        for c in self.children:
-            new.add(c.copy())
+        new = super().copy()
+        new.start = None
+        new.end = None
+
+        for c in self.children():
+            new.add(c.copy())  # noqa
         return new
-
-    def take(self, node, front=False):
-        """If node is a GroupNode, then take all of its child nodes.  Otherwise, add node as a child."""
-
-        if isinstance(node, GroupNode):
-            if front:
-                self.children.extendleft(reversed(node.children))
-            else:
-                self.children.extend(node.children)
-
-            for n in node.children:
-                n.parent = self
-
-            node.children.clear()
-        else:
-            self.add(node, front)
 
     def filter(self, filter_func) -> GroupNode:
         """
@@ -143,28 +241,28 @@ class GroupNode(Node):
             if level > MAX_RECURSE_LEVEL:
                 raise ValueError("Max recursion level reached")
 
-            # Iterate through the object's children using a queue
-            children = node.children
-            node.children = deque()
+            # Iterate through the object's children
+            n = node.start
 
-            while children:
-                n = children.popleft()
-
+            while n:
                 # Call the function on the child node, adding the result back if returning a valid object
-                n = filter_func(n, children)
-                if isinstance(n, GroupNode):
-                    n = _do_filter(n, level + 1)
-                if n:
-                    node.add(n)
+                n2 = filter_func(n)
+                if isinstance(n2, GroupNode):
+                    n2 = _do_filter(n2, level + 1)
+
+                if not n2:
+                    n = n.pop(1)
+                else:
+                    n = n.replace(n2).next
 
             return node
 
         # Call the function on the root node then go up one node
-        obj = filter_func(self, deque())
+        obj = filter_func(self)
         return _do_filter(obj)
 
     def __str__(self):
-        return ''.join(map(str, self.children))
+        return ''.join(map(str, self.children()))
 
 
 # Tokenizer tokens

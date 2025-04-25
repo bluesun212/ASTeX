@@ -11,15 +11,18 @@ __all__ = ['Demacro']
 
 
 # Newcommand-related ones
-def _read_command_name(it):
+def _read_command_name(node: Node):
     # Ignore stars for now, TODO
-    n = read_next(it)
+    n = read_next(node)
     if isinstance(n, TextNode) and n.data == '*':
-        n = read_next(it)
+        n.pop()
+        n = read_next(node)
 
     # Extract command name
+    n.pop()
     if isinstance(n, GroupNode):
-        n = read_next(n.children)
+        n.add(WhitespaceNode(' '), after=False)
+        n = read_next(n.start)
 
     if isinstance(n, CommandNode):
         return n.data
@@ -27,26 +30,24 @@ def _read_command_name(it):
     raise ValueError("Incorrectly formatted command name")
 
 
-def _get_bracket_args(it):
-    def _to_args(node):
-        a = int(str(node))
+def _get_bracket_args(node):
+    def _to_args(n):
+        a = int(str(n))
         if 0 <= a < 9:
             return a
         raise ValueError("Incorrectly formatted number of arguments")
 
     # A number of arguments was specified
     args = 0
-    temp = read_bracket_arg(it)
+    temp = read_bracket_arg(node)
     if temp:
         args = _to_args(temp)
 
-    default = read_bracket_arg(it)
-    temp = read_next(it)
-
-    return args, default, temp
+    default = read_bracket_arg(node)
+    return args, default
 
 
-def _expand_macro(it, data, parent):
+def _expand_macro(node, data):
     args = data['args']
     tokens = []
 
@@ -54,7 +55,7 @@ def _expand_macro(it, data, parent):
         # Read in first argument, handling the default as required
 
         if data['default'] is not None:
-            temp = read_bracket_arg(it)
+            temp = read_bracket_arg(node)
             if temp:
                 tokens.append(temp)
             else:
@@ -64,22 +65,20 @@ def _expand_macro(it, data, parent):
 
         # Read in the rest of the arguments
         for _ in range(args):
-            tokens.append(read_next(it))
+            temp = read_next(node).pop()
+            tokens.append(temp)
 
     # Replace the parameter tokens with the read-in parameters
     if callable(data['body']):
         temp = GroupNode()
-        ret = data['body'](parent, it, *tokens)
+        ret = data['body'](node, *tokens)
         if ret:  # In case None was returned
             temp.take(ret)
     else:
         temp = replace_parameters(data['body'].copy(), tokens)
 
-    for c in reversed(temp.children):
-        # Add to front of queue to process expansion
-        # Has to be done in reverse because appendleft reverses order
-        c.parent = parent
-        it.appendleft(c)
+    # Push result in front of command node (which will be deleted)
+    node.parent.take(temp, node)
 
 
 class Demacro:
@@ -116,7 +115,7 @@ class Demacro:
             # Handle body argument, valid options: LaTeX text or a custom function
             if callable(v['body']):
                 body = v['body']
-                macro['args'] = len(signature(body).parameters) - 2
+                macro['args'] = len(signature(body).parameters) - 1
             elif isinstance(v['body'], GroupNode):
                 body = v['body']
             else:
@@ -145,7 +144,7 @@ class Demacro:
 
         self.add_macros(macros, replace)
 
-    def _process(self, n, children):
+    def _process(self, n: Node):
         if not n.parent:
             return n
 
@@ -166,20 +165,25 @@ class Demacro:
         if isinstance(n, CommandNode):
             if n.data in ('newcommand', 'renewcommand', 'providecommand'):
                 # Read in the command data
-                name = _read_command_name(children)
+                name = _read_command_name(n)
 
                 # We need to read in the command name regardless of the value of ignore_new_macros
                 # without doing so, it will try to demacro the following command in case it has been set
                 # TODO: Make this more robust by reading in the command then undoing the read
                 if self._ignore_new_macros:
+                    # Since command name was read in, we need to "undo" the read by appending
+                    # \newcommand{\[cmd]} BEFORE the current newcommand, that way
+                    # it won't read the replacement again
+                    nodes = GroupNode()
+                    nodes.add(CommandNode(n.data))
                     temp = BracketNode()
                     temp.add(CommandNode(name))
-                    n.parent.add(n)
-                    n.parent.add(temp)
+                    nodes.add(temp)
+                    n.parent.take(nodes, n, after=False)
                 else:
-                    args, default, temp = _get_bracket_args(children)
+                    args, default = _get_bracket_args(n)
                     body = GroupNode()
-                    body.take(temp)
+                    body.take(read_next(n).pop())
                     data = {'args': args, 'default': default, 'body': body}
 
                     # Add data to macros dict
@@ -192,20 +196,19 @@ class Demacro:
                 return None
             elif n.data in ('newenvironment', 'renewenvironment') and not self._ignore_new_macros:
                 # Read in environment name
-                temp = read_next(children)
+                temp = read_next(n).pop()
                 name = str(temp)
                 if isinstance(temp, BracketNode):
                     name = name[1:-1]
 
                 # Read in number of args and default arg if available
-                args, default, temp = _get_bracket_args(children)
+                args, default = _get_bracket_args(n)
 
                 # Read in begin and end code
                 begin_body = GroupNode()
-                begin_body.take(temp)
-                temp = read_next(children)
+                begin_body.take(read_next(n).pop())
                 end_body = GroupNode()
-                end_body.take(temp)
+                end_body.take(read_next(n).pop())
 
                 # Add data to macros dict
                 if n.data == 'newenvironment' and name in macros:
@@ -217,11 +220,11 @@ class Demacro:
 
                 return None
             elif n.data in macros:
-                _expand_macro(children, macros[n.data], n.parent)
+                _expand_macro(n, macros[n.data])
                 return None
             elif n.data in ('begin', 'end'):
                 # Read in name
-                temp = read_next(children)
+                temp = read_next(n)
                 name = str(temp)
                 if isinstance(temp, BracketNode):
                     name = name[1:-1]
@@ -231,23 +234,14 @@ class Demacro:
 
                 # Insert macro if it exists
                 if name in macros:
-                    _expand_macro(children, macros[name], n.parent)
+                    temp.pop()
+                    _expand_macro(n, macros[name])
                     return None
-                else:
-                    # Undo reading of name
-                    children.appendleft(temp)
         elif isinstance(n, EnvironmentNode) and n.name in macros:
-            # Expand \end macro, we have to do this first because we add to the head of the deque
-            _expand_macro(children, macros[f"end{n.name}"], n.parent)
-
-            # Read arguments then expand \begin macro in new deque in front of all internal tokens
-            _expand_macro(n.children, macros[n.name], n)
-
-            # Now add that deque in front
-            for temp in reversed(n.children):
-                temp.parent = n.parent
-                children.appendleft(temp)
-
+            # Expand \end macro in front of node, then put in all children of n, then expand the \begin macro
+            _expand_macro(n, macros[f"end{n.name}"])
+            n.parent.take(n, n)
+            _expand_macro(n, macros[n.name])
             return None
 
         return n

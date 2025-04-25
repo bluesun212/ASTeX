@@ -22,29 +22,28 @@ Introducing: {in-between}lowercase
 \nop lol"""
 
 
-def _remove_empty_brackets(n: Node, _):
-    if isinstance(n, BracketNode) and len(n.children) == 0:
+def _remove_empty_brackets(n: Node):
+    if isinstance(n, BracketNode) and not n.start:
         return None
 
     return n
 
 
-def _capitalize_next_letter(n: Node, children):
+def _capitalize_next_letter(n: Node):
     # Add some text when \upper is encountered
     if isinstance(n, CommandNode) and n.data == 'upper':
         # Capitalize next letter
-        temp = read_next(children)
-        if isinstance(temp, TextNode):
-            temp = TextNode(temp.data.upper())
 
-        temp.parent = n.parent
-        children.appendleft(temp)
+        temp = read_next(n, should_pop=False)
+        if isinstance(temp, TextNode):
+            temp.replace(TextNode(temp.data.upper()))
 
         # Add some pre-text
         pre = GroupNode()
         pre.take(TextNode("Introducing:"))
-        pre.take(WhitespaceNode(' '))
-        n.parent.take(pre)
+        if not isinstance(n.next, WhitespaceNode):
+            pre.take(WhitespaceNode(' '))
+        n.parent.take(pre, n)
 
         return None
 
