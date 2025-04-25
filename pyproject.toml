@@ -13,7 +13,7 @@ name = "astex"
 description = "ASTeX - a (La)TeX AST transformer and de-macro tool"
 authors=[{name = "Jared Jonas (bluesun212)", email = "my_github_nickname@gmail.com"}]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 license = { text = "GNU General Public License v3 (GPLv3)" }
 
 dynamic = ["dependencies", "version"]

@@ -30,7 +30,7 @@ def _read_command_name(node: Node):
     raise ValueError("Incorrectly formatted command name")
 
 
-def _get_bracket_args(node):
+def _get_bracket_args(node: Node):
     def _to_args(n):
         a = int(str(n))
         if 0 <= a < 9:
@@ -47,7 +47,7 @@ def _get_bracket_args(node):
     return args, default
 
 
-def _expand_macro(node, data):
+def _expand_macro(node: Node, data):
     args = data['args']
     tokens = []
 
