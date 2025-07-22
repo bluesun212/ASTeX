@@ -1,5 +1,12 @@
+# TODO:
+# - Verbatim, comment environment (and tokenizer)
+# - Add more features to CLI, add __main__.py
+# - Refactor unit tests to increase coverage, be more explanatory
+# - Add docstrings, comments
+# - Complete pyproject.toml
+# - Rewrite readme
+
 # Future ideas:
-# - option to strip comments
 # - option to expand \include or look into \usepackage for macros
 # - Handling \def, \let, etc
 # - Dealing with paragraph breaks in commands
@@ -21,6 +28,7 @@ def _read_command_name(node: Node):
     # Extract command name
     n.pop()
     if isinstance(n, GroupNode):
+        # TODO: This is a workaround because read_next skips the current
         n.add(WhitespaceNode(' '), after=False)
         n = read_next(n.start)
 
@@ -88,19 +96,19 @@ class Demacro:
         self.macros = {}
         self._ignore_new_macros = False
 
+    def expand(self, root: GroupNode, macros=None):
+        root.data = {'macros': macros if macros is not None else {}, 'copied': False}
+        root = root.filter(self._process)
+        macros = root.data['macros']
+        return clear_data(root), macros
+
     def demacro(self, root: GroupNode, ignore_new_macros=False) -> GroupNode:
         """De-macro the input AST node and return it.  All found macros are collected in the
         macros field, which persists across demacro calls."""
 
         self._ignore_new_macros = ignore_new_macros
-        root.data = {'macros': self.macros, 'copied': False}
-        root = root.filter(self._process)
-        self.macros = root.data['macros']
-        return clear_data(root)
-
-    def expand_unsafe(self, root: GroupNode, ignore_new_macros=False):
-        self._ignore_new_macros = ignore_new_macros
-        return root.filter(self._process)
+        root, self.macros = self.expand(root, macros=self.macros)
+        return root
 
     def add_macros(self, macros: dict, replace=False):
         """Adds macros to the list.  macros should be a dictionary containing the macro name as keys
@@ -144,6 +152,20 @@ class Demacro:
 
         self.add_macros(macros, replace)
 
+    @staticmethod
+    def check_macros(n: Node):
+        """An internal method that should be called when a Node's parent macros are
+        modified during processing."""
+
+        macros = n.parent.data['macros']
+
+        if not n.parent.data['copied']:
+            n.parent.data['copied'] = True
+            macros = macros.copy()
+            n.parent.data['macros'] = macros
+
+        return macros
+
     def _process(self, n: Node):
         if not n.parent:
             return n
@@ -152,14 +174,6 @@ class Demacro:
         if n.parent.data is None:
             n.parent.data = {'macros': n.parent.parent.data['macros'], 'copied': False}
         macros = n.parent.data['macros']
-
-        def _check_macros():
-            # This is to avoid having to make many copies of the macros dict
-            nonlocal macros
-            if not n.parent.data['copied']:
-                n.parent.data['copied'] = True
-                macros = macros.copy()
-                n.parent.data['macros'] = macros
 
         # Define or insert macros or environments
         if isinstance(n, CommandNode):
@@ -190,7 +204,7 @@ class Demacro:
                     if n.data == 'newcommand' and name in macros:
                         raise ValueError("Newcommand used for existing command")
                     elif n.data != 'providecommand' or name not in macros:
-                        _check_macros()
+                        macros = self.check_macros(n)
                         macros[name] = data
 
                 return None
@@ -214,7 +228,7 @@ class Demacro:
                 if n.data == 'newenvironment' and name in macros:
                     raise ValueError("Newenvironment used for existing environment")
                 else:
-                    _check_macros()
+                    macros = self.check_macros(n)
                     macros[name] = {'args': args, 'default': default, 'body': begin_body}
                     macros[f"end{name}"] = {'args': 0, 'default': None, 'body': end_body}
 

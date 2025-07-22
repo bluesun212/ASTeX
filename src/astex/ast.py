@@ -266,7 +266,7 @@ class GroupNode(Node):
 
 
 # Tokenizer tokens
-TOKEN_COMMENT = re.compile(r"%(.*\n?)", re.MULTILINE)
+TOKEN_COMMENT = re.compile(r"%(.*\n?[ \t]*)")
 TOKEN_COMMAND = re.compile(r"\\([a-zA-Z@]{2,}|.)")
 TOKEN_PARAMETER = re.compile(r"(#+)(\d)")
 TOKEN_LCB = re.compile(r"\{")

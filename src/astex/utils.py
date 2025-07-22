@@ -4,7 +4,8 @@ from typing import Optional, List
 from astex.ast import *
 
 __all__ = ["EnvironmentNode", "read_next", "read_bracket_arg", "replace_parameters",
-           "fix_whitespace", "clear_data",  "parse_environments"]
+           "fix_whitespace", "remove_extra_whitespace", "remove_comments", "clear_data", "clean",
+           "parse_environments", "get_environment_name"]
 
 from astex.ast import TextNode, GroupNode, CommentNode, Node, ParameterNode
 
@@ -55,6 +56,7 @@ def read_next(n: Node, error=True, skip_whitespace=True, skip_comments=True, sho
 
 
 def read_bracket_arg(n: Node) -> Optional[GroupNode]:
+    # TODO: Safe undo
     temp = read_next(n, error=False)
 
     if isinstance(temp, TextNode) and temp.data == '[':
@@ -101,30 +103,88 @@ def replace_parameters(root: GroupNode, parameters: List[Node], copy=True):
     return root.filter(_do_replace)
 
 
+def _fix_whitespace(n):
+    if n.next:
+        if isinstance(n, CommandNode) and n.data[0].isalpha() and \
+                isinstance(n.next, TextNode) and n.next.data[0].isalpha():
+            n.parent.add(WhitespaceNode(data=' '), n)
+
+    return n
+
+
+def _remove_whitespace(node):
+    if isinstance(node, WhitespaceNode):
+        # Get all subsequent whitespace, find "longest" one
+        mode = 0
+        n = node
+
+        while isinstance(n, WhitespaceNode):
+            if mode < 2:
+                newlines = n.data.count('\n')
+                if newlines > 1:
+                    mode = 2
+                elif newlines == 1:
+                    mode = 1
+
+            # Remove all whitespace except for the first one
+            if n is node:
+                n = n.next
+            else:
+                n = n.pop(1)
+
+        # Simplify whitespace depending on the max length in run
+        if mode == 0:
+            return WhitespaceNode(' ')
+        elif mode == 1:
+            return WhitespaceNode('\n')
+        else:
+            return WhitespaceNode('\n\n')
+
+    return node
+
+
+def _remove_comments(node: Node):
+    return None if isinstance(node, CommentNode) else node
+
+
+def _clear_data(n):
+    if isinstance(n, GroupNode):
+        n.data = None
+
+    return n
+
+
 def fix_whitespace(root: GroupNode) -> GroupNode:
     """Inserts a space between alphabetic backslash commands and text if none exists."""
-
-    def _fix_whitespace(n):
-        if n.next:
-            if isinstance(n, CommandNode) and n.data[0].isalpha() and \
-                    isinstance(n.next, TextNode) and n.next.data[0].isalpha():
-                n.parent.add(WhitespaceNode(data=' '), n)
-
-        return n
-
     return root.filter(_fix_whitespace)
+
+
+def remove_extra_whitespace(root: GroupNode) -> GroupNode:
+    """Simplifies runs of whitespace."""
+    return root.filter(_remove_whitespace)
+
+
+def remove_comments(root: GroupNode):
+    """Removes all comments including following whitespace"""
+    return root.filter(_remove_comments)
 
 
 def clear_data(root: GroupNode) -> GroupNode:
     """Deletes any extra data stored in the GroupNode objects in the provided Node and its children."""
+    return root.filter(_clear_data)
 
-    def _clear_data(n):
-        if isinstance(n, GroupNode):
-            n.data = None
+
+def clean(root: GroupNode) -> GroupNode:
+    """Combines clear_data, remove_comments, remove_extra_whitespace, and fix_whitespace into one function."""
+
+    def _clean(n: Node):
+        n = _remove_comments(n)
+        if n:
+            n = _clear_data(_fix_whitespace(_remove_whitespace(n)))
 
         return n
 
-    return root.filter(_clear_data)
+    return root.filter(_clean)
 
 
 def parse_environments(root: GroupNode) -> GroupNode:
@@ -169,3 +229,36 @@ def parse_environments(root: GroupNode) -> GroupNode:
         return n
 
     return root.filter(_parse_environments)
+
+
+def get_environment_name(n: Node) -> Optional[str]:
+    level = 0
+
+    while n:
+        # Find next \begin that isn't followed by matching \end
+        if isinstance(n, CommandNode):
+            if n.data == 'end':
+                level += 1
+            elif n.data == 'begin':
+                if level == 0:
+                    # Read environment name in
+                    name_node = read_next(n, should_pop=False)
+                    name = str(name_node)
+                    if isinstance(name_node, BracketNode):
+                        name = name[1:-1]
+
+                    return name
+
+                level -= 1
+
+        # If we reached the beginning of the nodes, check the next level up
+        if n.prev:
+            n = n.prev
+        else:
+            if isinstance(n.parent, EnvironmentNode):
+                return n.parent.name
+
+            n = n.parent
+
+    return None
+
